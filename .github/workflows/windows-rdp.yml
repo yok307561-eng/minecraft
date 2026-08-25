@@ -1,0 +1,240 @@
+name: Minecraft 26.2 + RDP + Tailscale
+
+on:
+  workflow_dispatch:
+
+jobs:
+  minecraft:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+
+      # ==============================
+      # 1. Enable RDP
+      # ==============================
+      - name: Enable RDP
+        shell: powershell
+        run: |
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+      # ==============================
+      # 2. Create RDP Admin
+      # ==============================
+      - name: Create RDP Admin
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          $Password = ConvertTo-SecureString `
+            $Env:RDP_PASSWORD `
+            -AsPlainText `
+            -Force
+
+          New-LocalUser `
+            -Name "MinecraftAdmin" `
+            -Password $Password `
+            -PasswordNeverExpires `
+            -ErrorAction SilentlyContinue
+
+          Add-LocalGroupMember `
+            -Group "Administrators" `
+            -Member "MinecraftAdmin" `
+            -ErrorAction SilentlyContinue
+
+      # ==============================
+      # 3. Install Java 25
+      # ==============================
+      - name: Install Java 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # ==============================
+      # 4. Install Tailscale
+      # ==============================
+      - name: Install Tailscale
+        shell: powershell
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          $Installer = "C:\tailscale.msi"
+
+          Invoke-WebRequest `
+            "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" `
+            -OutFile $Installer
+
+          Start-Process `
+            msiexec.exe `
+            -ArgumentList "/i $Installer /quiet /norestart" `
+            -Wait
+
+          Start-Sleep -Seconds 5
+
+          $Tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+
+          & $Tailscale up `
+            --authkey="$Env:TAILSCALE_AUTHKEY" `
+            --hostname="minecraft-26-2"
+
+          Start-Sleep -Seconds 8
+
+      # ==============================
+      # 5. Minecraft Folder
+      # ==============================
+      - name: Create Minecraft Folder
+        shell: powershell
+        run: |
+          New-Item `
+            -ItemType Directory `
+            -Path "C:\Minecraft" `
+            -Force | Out-Null
+
+      # ==============================
+      # 6. Download Minecraft Server 26.2
+      # ==============================
+      - name: Download Minecraft 26.2
+        shell: powershell
+        run: |
+          $Url = "https://piston-data.mojang.com/v1/objects/823e2250d24b3ddac457a60c92a6a941943fcd6a/server.jar"
+
+          Invoke-WebRequest `
+            -Uri $Url `
+            -OutFile "C:\Minecraft\server.jar"
+
+      # ==============================
+      # 7. Accept EULA
+      # ==============================
+      - name: Accept EULA
+        shell: powershell
+        run: |
+          Set-Content `
+            -Path "C:\Minecraft\eula.txt" `
+            -Value "eula=true"
+
+      # ==============================
+      # 8. Configure Minecraft
+      # ==============================
+      - name: Configure Minecraft
+        shell: powershell
+        run: |
+          @"
+          server-port=25565
+          server-ip=
+          motd=Minecraft 26.2 Cloud Server
+          max-players=10
+          gamemode=survival
+          force-gamemode=false
+          difficulty=normal
+          hardcore=false
+          online-mode=true
+          view-distance=10
+          simulation-distance=8
+          spawn-protection=0
+          enable-command-block=true
+          allow-flight=false
+          pvp=true
+          white-list=false
+          "@ | Set-Content "C:\Minecraft\server.properties"
+
+      # ==============================
+      # 9. Open Minecraft Port
+      # ==============================
+      - name: Open Minecraft Firewall
+        shell: powershell
+        run: |
+          New-NetFirewallRule `
+            -DisplayName "Minecraft Server 25565" `
+            -Direction Inbound `
+            -Protocol TCP `
+            -LocalPort 25565 `
+            -Action Allow `
+            -ErrorAction SilentlyContinue
+
+      # ==============================
+      # 10. Get Tailscale IP
+      # ==============================
+      - name: Get Tailscale IP
+        id: tailscale-ip
+        shell: powershell
+        run: |
+          $Tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+          $ip = (& $Tailscale ip -4).Trim()
+
+          "ip=$ip" >> $env:GITHUB_OUTPUT
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host " TAILSCALE IP: $ip"
+          Write-Host " MINECRAFT:    $ip`:25565"
+          Write-Host "=========================================="
+
+      # ==============================
+      # 11. Start Minecraft
+      # ==============================
+      - name: Start Minecraft Server
+        shell: powershell
+        run: |
+          Start-Process `
+            -FilePath "java.exe" `
+            -WorkingDirectory "C:\Minecraft" `
+            -ArgumentList "-Xms2G -Xmx6G -jar server.jar nogui"
+
+          Start-Sleep -Seconds 20
+
+          if (-not (Get-Process java -ErrorAction SilentlyContinue)) {
+            Write-Host "Minecraft server failed to start."
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host " MINECRAFT 26.2 IS RUNNING"
+          Write-Host "=========================================="
+
+      # ==============================
+      # 12. Show Connection Info
+      # ==============================
+      - name: Show Connection Information
+        shell: powershell
+        run: |
+          $Tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+          $ip = (& $Tailscale ip -4).Trim()
+
+          Write-Host ""
+          Write-Host "##########################################"
+          Write-Host "#                                        #"
+          Write-Host "#       MINECRAFT JAVA EDITION 26.2     #"
+          Write-Host "#                                        #"
+          Write-Host "# Server IP : $ip"
+          Write-Host "# Port      : 25565"
+          Write-Host "# Address   : $ip`:25565"
+          Write-Host "#                                        #"
+          Write-Host "# RDP User  : MinecraftAdmin"
+          Write-Host "#                                        #"
+          Write-Host "##########################################"
+          Write-Host ""
+
+      # ==============================
+      # 13. Keep Runner Alive
+      # ==============================
+      - name: Keep Server Alive
+        shell: powershell
+        run: |
+          while ($true) {
+            $java = Get-Process java -ErrorAction SilentlyContinue
+
+            if (-not $java) {
+              Write-Host "Minecraft server stopped."
+              exit 1
+            }
+
+            Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Minecraft 26.2 running..."
+            Start-Sleep -Seconds 60
+          }
