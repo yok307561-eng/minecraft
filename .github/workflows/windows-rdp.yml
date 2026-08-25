@@ -31,6 +31,11 @@ jobs:
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($Env:RDP_PASSWORD)) {
+            Write-Error "RDP_PASSWORD Secret is missing."
+            exit 1
+          }
+
           $Password = ConvertTo-SecureString `
             $Env:RDP_PASSWORD `
             -AsPlainText `
@@ -64,6 +69,11 @@ jobs:
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($Env:TAILSCALE_AUTHKEY)) {
+            Write-Error "TAILSCALE_AUTHKEY Secret is missing."
+            exit 1
+          }
+
           $Installer = "C:\tailscale.msi"
 
           Invoke-WebRequest `
@@ -86,7 +96,7 @@ jobs:
           Start-Sleep -Seconds 8
 
       # ==============================
-      # 5. Minecraft Folder
+      # 5. Create Minecraft Folder
       # ==============================
       - name: Create Minecraft Folder
         shell: powershell
@@ -97,7 +107,7 @@ jobs:
             -Force | Out-Null
 
       # ==============================
-      # 6. Download Minecraft Server 26.2
+      # 6. Download Minecraft 26.2
       # ==============================
       - name: Download Minecraft 26.2
         shell: powershell
@@ -133,9 +143,9 @@ jobs:
           force-gamemode=false
           difficulty=normal
           hardcore=false
-          online-mode=true
+          online-mode=false
           view-distance=10
-          simulation-distance=8
+          simulation-distance=12
           spawn-protection=0
           enable-command-block=true
           allow-flight=false
@@ -161,13 +171,11 @@ jobs:
       # 10. Get Tailscale IP
       # ==============================
       - name: Get Tailscale IP
-        id: tailscale-ip
         shell: powershell
         run: |
           $Tailscale = "C:\Program Files\Tailscale\tailscale.exe"
-          $ip = (& $Tailscale ip -4).Trim()
 
-          "ip=$ip" >> $env:GITHUB_OUTPUT
+          $ip = (& $Tailscale ip -4).Trim()
 
           Write-Host ""
           Write-Host "=========================================="
@@ -189,7 +197,7 @@ jobs:
           Start-Sleep -Seconds 20
 
           if (-not (Get-Process java -ErrorAction SilentlyContinue)) {
-            Write-Host "Minecraft server failed to start."
+            Write-Error "Minecraft server failed to start."
             exit 1
           }
 
@@ -205,24 +213,22 @@ jobs:
         shell: powershell
         run: |
           $Tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+
           $ip = (& $Tailscale ip -4).Trim()
 
           Write-Host ""
           Write-Host "##########################################"
-          Write-Host "#                                        #"
           Write-Host "#       MINECRAFT JAVA EDITION 26.2     #"
-          Write-Host "#                                        #"
+          Write-Host "##########################################"
           Write-Host "# Server IP : $ip"
           Write-Host "# Port      : 25565"
           Write-Host "# Address   : $ip`:25565"
-          Write-Host "#                                        #"
           Write-Host "# RDP User  : MinecraftAdmin"
-          Write-Host "#                                        #"
           Write-Host "##########################################"
           Write-Host ""
 
       # ==============================
-      # 13. Keep Runner Alive
+      # 13. Keep Server Alive
       # ==============================
       - name: Keep Server Alive
         shell: powershell
@@ -231,7 +237,7 @@ jobs:
             $java = Get-Process java -ErrorAction SilentlyContinue
 
             if (-not $java) {
-              Write-Host "Minecraft server stopped."
+              Write-Error "Minecraft server stopped."
               exit 1
             }
 
